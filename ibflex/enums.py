@@ -237,6 +237,7 @@ class TransferType(str, enum.Enum):
     ACATS = "ACATS"
     ATON = "ATON"
     FOP = "FOP"
+    INTERCOMPANY = "INTERCOMPANY"
 
 
 @enum.unique

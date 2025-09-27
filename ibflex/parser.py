@@ -111,14 +111,14 @@ def parse_data_element(
     Class = getattr(Types, elem.tag)
 
     #  Parse element attributes
-    try:
-        attrs = dict(
-            parse_element_attr(Class, k, v)
-            for k, v in elem.attrib.items()
-        )
-    except KeyError as exc:
-        msg = f"{Class.__name__} has no attribute " + str(exc)
-        raise FlexParserError(msg)
+    attrs = {}
+    for k, v in elem.attrib.items():
+        try:
+            key, value = parse_element_attr(Class, k, v)
+            attrs[key] = value
+        except KeyError:
+            # Ignore unexpected attributes
+            continue
 
     #  FlexQueryResponse & FlexStatement are the only data elements
     #  that contain other data elements.
