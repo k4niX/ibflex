@@ -7,7 +7,7 @@ https://www.interactivebrokers.com/en/software/am/am/reports/flex_web_service_ve
 # stdlib imports
 from dataclasses import dataclass
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, date
 import time
 from typing import Union, Optional
 
@@ -19,9 +19,9 @@ import requests
 ###############################################################################
 # SERVICE LOCATIONS
 ###############################################################################
-FLEX_URL = 'https://gdcdyn.interactivebrokers.com/Universal/servlet/'
-REQUEST_URL = FLEX_URL + 'FlexStatementService.SendRequest'
-STMT_URL = FLEX_URL + 'FlexStatementService.GetStatement'
+FLEX_URL = 'https://gdcdyn.interactivebrokers.com/AccountManagement/FlexWebService/'
+REQUEST_URL = FLEX_URL + 'SendRequest'
+STMT_URL = FLEX_URL + 'GetStatement'
 
 
 ###############################################################################
@@ -65,7 +65,7 @@ class BadResponseError(IbflexClientError):
     def __init__(self, response: requests.Response):
         self.response = response
         super(BadResponseError, self).__init__(response.content)
-        
+
 
 class StatementGenerationTimeout(IbflexClientError):
     """ Exception raised when the Flex server says it is generating the response,
@@ -103,15 +103,18 @@ class StatementError:
 ###############################################################################
 # FUNCTIONS
 ###############################################################################
-def download(token: str, query_id: str, max_tries: Optional[int] = 5) -> bytes:
+def download(token: str, query_id: str, max_tries: Optional[int] = 5,
+             from_date: Optional[date] = None, to_date: Optional[date] = None) -> bytes:
     """2-step FlexQueryReport download process.
 
     Args:
         token: Current access token from Reports > Settings > FlexWeb Service.
         query_id: Flex Query ID from
                   Reports > Flex Queries > Custom Flex Queries > Configure.
+        from_date: Optional start date for the report (adds 'fd' parameter).
+        to_date: Optional end date for the report (adds 'td' parameter).
     """
-    stmt_access = request_statement(token, query_id)
+    stmt_access = request_statement(token, query_id, from_date=from_date, to_date=to_date)
     status = 0
     tries = 0
     while status is not True:
@@ -131,12 +134,13 @@ def download(token: str, query_id: str, max_tries: Optional[int] = 5) -> bytes:
 
 
 def request_statement(
-    token: str, query_id: str, url: Optional[str] = None
+    token: str, query_id: str, url: Optional[str] = None,
+    from_date: Optional[date] = None, to_date: Optional[date] = None
 ) -> StatementAccess:
     """First part of the 2-step download process.
     """
     url = url or REQUEST_URL
-    response = submit_request(url, token, query=query_id)
+    response = submit_request(url, token, query=query_id, from_date=from_date, to_date=to_date)
     stmt_access = parse_stmt_response(response)
     if isinstance(stmt_access, StatementError):
         raise ResponseCodeError(
@@ -146,7 +150,8 @@ def request_statement(
     return stmt_access
 
 
-def submit_request(url: str, token: str, query: str) -> requests.Response:
+def submit_request(url: str, token: str, query: str,
+                   from_date: Optional[date] = None, to_date: Optional[date] = None) -> requests.Response:
     """Post a query to an API access point, along with an authentication token.
 
     Retry with a progressive timeout window.
@@ -154,13 +159,20 @@ def submit_request(url: str, token: str, query: str) -> requests.Response:
     MAX_REQUESTS = 3
     TIMEOUT_INCREMENT = 5
 
+    # Build request parameters
+    params = {"v": "3", "t": token, "q": query}
+    if from_date:
+        params["fd"] = from_date.strftime("%Y%m%d")
+    if to_date:
+        params["td"] = to_date.strftime("%Y%m%d")
+
     response = None
     req_count = 1
     while (not response):
         try:
             response = requests.get(
                 url,
-                params={"v": "3", "t": token, "q": query},
+                params=params,
                 headers={"user-agent": "Java"},
                 timeout=req_count * TIMEOUT_INCREMENT,
             )
@@ -247,9 +259,32 @@ def main():
                            help='Current Flex Web Service token')
     argparser.add_argument('--query', '-q', required=True,
                            help='Flex Query ID#')
+    argparser.add_argument('--from-date', type=str,
+                           help='Start date in YYYY-MM-DD format')
+    argparser.add_argument('--to-date', type=str,
+                           help='End date in YYYY-MM-DD format')
+    argparser.add_argument('--year', '-y', type=int,
+                           help='Year (sets from-date to Jan 1st and to-date to Dec 31st)')
     args = argparser.parse_args()
 
-    statement = download(args.token, args.query)
+    # Handle year parameter
+    from_date = None
+    to_date = None
+
+    if args.year:
+        from_date = date(args.year, 1, 1)
+        to_date = date(args.year, 12, 31)
+
+        # If to_date is a Saturday, set it to the 30th of the month
+        if to_date and to_date.weekday() == 5:  # Saturday is weekday 5
+            to_date = to_date.replace(day=30)
+    else:
+        if args.from_date:
+            from_date = datetime.strptime(args.from_date, '%Y-%m-%d').date()
+        if args.to_date:
+            to_date = datetime.strptime(args.to_date, '%Y-%m-%d').date()
+
+    statement = download(args.token, args.query, from_date=from_date, to_date=to_date)
     print(statement.decode())
 
 
